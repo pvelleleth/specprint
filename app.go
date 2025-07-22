@@ -33,27 +33,9 @@ type PRDResult struct {
 	Path    string `json:"path,omitempty"`
 }
 
-// Epic represents a high-level feature or major component
-type Epic struct {
-	ID          int     `json:"id"`
-	Title       string  `json:"title"`
-	Description string  `json:"description"`
-	Stories     []Story `json:"stories"`
-}
-
-// Story represents a user story or functional requirement
-type Story struct {
-	ID          int    `json:"id"`
-	EpicID      int    `json:"epicId"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	Tasks       []Task `json:"tasks"`
-}
-
 // Task represents a single implementation task
 type Task struct {
 	ID           int    `json:"id"`
-	StoryID      int    `json:"storyId"`
 	Title        string `json:"title"`
 	Description  string `json:"description"`
 	Dependencies []int  `json:"dependencies"`
@@ -65,7 +47,7 @@ type Task struct {
 type TaskGenerationResult struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
-	Epics   []Epic `json:"epics,omitempty"`
+	Tasks   []Task `json:"tasks,omitempty"` // Changed from Epics []Epic
 }
 
 // Workspace represents a cloned repository workspace
@@ -161,73 +143,69 @@ func (a *App) GenerateTasks(prdContent string) TaskGenerationResult {
 	client := openai.NewClient(apiKey)
 
 	// Construct the system prompt
-	systemPrompt := `You are an expert project manager and software architect. Your task is to analyze a Product Requirements Document (PRD) and generate a hierarchical structure of Epics > Stories > Tasks.
+	systemPrompt := `You are an expert project manager and software architect. Your task is to analyze a Product Requirements Document (PRD) and generate a flat list of actionable tasks with proper dependencies.
 
 STRUCTURE:
-- EPICS: High-level features or major components (3-6 epics)
-- STORIES: User stories or functional requirements within each epic (2-5 stories per epic)
-- TASKS: Specific implementation tasks within each story (3-8 tasks per story)
+- TASKS: Specific implementation tasks (aim for 20-50 tasks total, depending on PRD complexity)
 
-For each level, provide:
-
-EPIC:
+For each task, provide:
 - id: Unique sequential number starting from 1
-- title: High-level feature name (max 60 characters)
-- description: Brief overview of the epic (max 150 characters)
-- stories: Array of stories within this epic
-
-STORY:
-- id: Unique sequential number starting from 1
-- epicId: ID of the parent epic
-- title: User story title (max 80 characters)
-- description: User story description (max 200 characters)
-- tasks: Array of tasks within this story
-
-TASK:
-- id: Unique sequential number starting from 1
-- storyId: ID of the parent story
-- title: Specific task title (max 80 characters)
+- title: Specific task name (max 80 characters)
 - description: What needs to be done (max 200 characters)
 - dependencies: Array of task IDs that must be completed first (use [] if none)
 - priority: "high", "medium", or "low"
 - estimate: Time estimate like "2h", "1d", "3d"
 
-RULES:
-1. Organize by major functional areas (Epics)
-2. Break down into user-focused stories
-3. Create specific, actionable tasks
-4. Consider dependencies and sequencing
-5. Include setup, implementation, testing phases
-6. Provide realistic time estimates
-7. Aim for 3-6 epics, 2-5 stories per epic, 3-8 tasks per story
+DEPENDENCY RULES:
+1. **Setup Dependencies**: Infrastructure and setup tasks should have no dependencies
+2. **Logical Sequencing**: Tasks that depend on other tasks' outputs should reference them
+3. **Phase Dependencies**: Implementation tasks should depend on design tasks
+4. **Integration Dependencies**: API integration tasks should depend on backend tasks
+5. **Testing Dependencies**: Test tasks should depend on the features they test
+6. **Deployment Dependencies**: Deployment tasks should depend on all implementation tasks
 
-Return ONLY a valid JSON array of epics. Do not include any other text or formatting.
+COMMON DEPENDENCY PATTERNS:
+- Database setup → Backend API → Frontend integration → Testing → Deployment
+- Design system → UI components → Feature implementation → Integration testing
+- Authentication setup → User management → Protected features → Security testing
+- API design → Backend implementation → Frontend API calls → End-to-end testing
+
+TASK GENERATION RULES:
+1. Break down the PRD into specific, actionable tasks
+2. Consider dependencies and sequencing carefully
+3. Include setup, implementation, testing, and deployment phases
+4. Provide realistic time estimates
+5. Cover all aspects of the PRD comprehensively
+6. Ensure tasks are independent but properly sequenced via dependencies
+7. Create logical task groups that can be worked on in parallel when possible
+
+Return ONLY a valid JSON array of tasks. Do not include any other text or formatting.
 
 Example format:
 [
   {
     "id": 1,
-    "title": "User Authentication",
-    "description": "Complete user registration and login system",
-    "stories": [
-      {
-        "id": 1,
-        "epicId": 1,
-        "title": "User Registration",
-        "description": "Allow new users to create accounts",
-        "tasks": [
-          {
-            "id": 1,
-            "storyId": 1,
-            "title": "Registration Form UI",
-            "description": "Create user registration form with validation",
-            "dependencies": [],
-            "priority": "high",
-            "estimate": "4h"
-          }
-        ]
-      }
-    ]
+    "title": "Set up project repository",
+    "description": "Initialize Git repository and basic structure",
+    "dependencies": [],
+    "priority": "high",
+    "estimate": "1h"
+  },
+  {
+    "id": 2,
+    "title": "Design database schema",
+    "description": "Create database tables and relationships",
+    "dependencies": [],
+    "priority": "high",
+    "estimate": "4h"
+  },
+  {
+    "id": 3,
+    "title": "Implement user authentication",
+    "description": "Create login/register API endpoints",
+    "dependencies": [1, 2],
+    "priority": "high",
+    "estimate": "8h"
   }
 ]`
 
@@ -268,8 +246,8 @@ Example format:
 	responseContent := resp.Choices[0].Message.Content
 
 	// Parse the JSON response
-	var epics []Epic
-	err = json.Unmarshal([]byte(responseContent), &epics)
+	var tasks []Task // Changed from var epics []Epic
+	err = json.Unmarshal([]byte(responseContent), &tasks)
 	if err != nil {
 		return TaskGenerationResult{
 			Success: false,
@@ -278,165 +256,56 @@ Example format:
 	}
 
 	// Validate the parsed epics
-	if len(epics) == 0 {
+	if len(tasks) == 0 {
 		return TaskGenerationResult{
 			Success: false,
-			Message: "No epics were generated from the PRD",
+			Message: "No tasks were generated from the PRD",
 		}
 	}
 
-	// Validate epic structure and count total tasks
-	totalTasks := 0
-	for i, epic := range epics {
-		if epic.ID <= 0 {
+	for i, task := range tasks {
+		if task.ID <= 0 {
 			return TaskGenerationResult{
 				Success: false,
-				Message: fmt.Sprintf("Epic %d has invalid ID: %d", i+1, epic.ID),
+				Message: fmt.Sprintf("Task %d has invalid ID: %d", i+1, task.ID),
 			}
 		}
-		if strings.TrimSpace(epic.Title) == "" {
+		if strings.TrimSpace(task.Title) == "" {
 			return TaskGenerationResult{
 				Success: false,
-				Message: fmt.Sprintf("Epic %d has empty title", epic.ID),
+				Message: fmt.Sprintf("Task %d has empty title", task.ID),
 			}
 		}
-		if strings.TrimSpace(epic.Description) == "" {
+		if strings.TrimSpace(task.Description) == "" {
 			return TaskGenerationResult{
 				Success: false,
-				Message: fmt.Sprintf("Epic %d has empty description", epic.ID),
+				Message: fmt.Sprintf("Task %d has empty description", task.ID),
 			}
 		}
-
-		// Validate stories within epic
-		for j, story := range epic.Stories {
-			if story.ID <= 0 {
-				return TaskGenerationResult{
-					Success: false,
-					Message: fmt.Sprintf("Story %d in Epic %d has invalid ID: %d", j+1, epic.ID, story.ID),
-				}
+		if strings.TrimSpace(task.Priority) == "" {
+			return TaskGenerationResult{
+				Success: false,
+				Message: fmt.Sprintf("Task %d has empty priority", task.ID),
 			}
-			if story.EpicID != epic.ID {
-				return TaskGenerationResult{
-					Success: false,
-					Message: fmt.Sprintf("Story %d has incorrect epicId: expected %d, got %d", story.ID, epic.ID, story.EpicID),
-				}
+		}
+		if strings.TrimSpace(task.Estimate) == "" {
+			return TaskGenerationResult{
+				Success: false,
+				Message: fmt.Sprintf("Task %d has empty estimate", task.ID),
 			}
-			if strings.TrimSpace(story.Title) == "" {
-				return TaskGenerationResult{
-					Success: false,
-					Message: fmt.Sprintf("Story %d in Epic %d has empty title", story.ID, epic.ID),
-				}
-			}
-			if strings.TrimSpace(story.Description) == "" {
-				return TaskGenerationResult{
-					Success: false,
-					Message: fmt.Sprintf("Story %d in Epic %d has empty description", story.ID, epic.ID),
-				}
-			}
-
-			// Validate tasks within story
-			for k, task := range story.Tasks {
-				if task.ID <= 0 {
-					return TaskGenerationResult{
-						Success: false,
-						Message: fmt.Sprintf("Task %d in Story %d has invalid ID: %d", k+1, story.ID, task.ID),
-					}
-				}
-				if task.StoryID != story.ID {
-					return TaskGenerationResult{
-						Success: false,
-						Message: fmt.Sprintf("Task %d has incorrect storyId: expected %d, got %d", task.ID, story.ID, task.StoryID),
-					}
-				}
-				if strings.TrimSpace(task.Title) == "" {
-					return TaskGenerationResult{
-						Success: false,
-						Message: fmt.Sprintf("Task %d in Story %d has empty title", task.ID, story.ID),
-					}
-				}
-				if strings.TrimSpace(task.Description) == "" {
-					return TaskGenerationResult{
-						Success: false,
-						Message: fmt.Sprintf("Task %d in Story %d has empty description", task.ID, story.ID),
-					}
-				}
-				if strings.TrimSpace(task.Priority) == "" {
-					return TaskGenerationResult{
-						Success: false,
-						Message: fmt.Sprintf("Task %d in Story %d has empty priority", task.ID, story.ID),
-					}
-				}
-				if strings.TrimSpace(task.Estimate) == "" {
-					return TaskGenerationResult{
-						Success: false,
-						Message: fmt.Sprintf("Task %d in Story %d has empty estimate", task.ID, story.ID),
-					}
-				}
-				if task.Dependencies == nil {
-					return TaskGenerationResult{
-						Success: false,
-						Message: fmt.Sprintf("Task %d in Story %d has nil dependencies", task.ID, story.ID),
-					}
-				}
-				totalTasks++
+		}
+		if task.Dependencies == nil {
+			return TaskGenerationResult{
+				Success: false,
+				Message: fmt.Sprintf("Task %d has nil dependencies", task.ID),
 			}
 		}
 	}
 
 	return TaskGenerationResult{
 		Success: true,
-		Message: fmt.Sprintf("Successfully generated %d epics with %d total tasks from PRD", len(epics), totalTasks),
-		Epics:   epics,
-	}
-}
-
-// FlattenTasks converts the hierarchical Epic > Story > Task structure into a flat list of tasks
-// This is useful for backward compatibility and simpler processing
-func (a *App) FlattenTasks(epics []Epic) []Task {
-	var flatTasks []Task
-
-	for _, epic := range epics {
-		for _, story := range epic.Stories {
-			for _, task := range story.Tasks {
-				// Create a flattened task with epic and story context
-				flatTask := Task{
-					ID:           task.ID,
-					StoryID:      task.StoryID,
-					Title:        fmt.Sprintf("[%s] %s", epic.Title, task.Title),
-					Description:  fmt.Sprintf("Epic: %s | Story: %s | %s", epic.Title, story.Title, task.Description),
-					Dependencies: task.Dependencies,
-					Priority:     task.Priority,
-					Estimate:     task.Estimate,
-				}
-				flatTasks = append(flatTasks, flatTask)
-			}
-		}
-	}
-
-	return flatTasks
-}
-
-// GetTaskSummary provides a summary of the generated tasks
-func (a *App) GetTaskSummary(epics []Epic) map[string]interface{} {
-	totalTasks := 0
-	totalStories := 0
-	priorityCounts := map[string]int{"high": 0, "medium": 0, "low": 0}
-
-	for _, epic := range epics {
-		totalStories += len(epic.Stories)
-		for _, story := range epic.Stories {
-			totalTasks += len(story.Tasks)
-			for _, task := range story.Tasks {
-				priorityCounts[task.Priority]++
-			}
-		}
-	}
-
-	return map[string]interface{}{
-		"totalEpics":     len(epics),
-		"totalStories":   totalStories,
-		"totalTasks":     totalTasks,
-		"priorityCounts": priorityCounts,
+		Message: fmt.Sprintf("Successfully generated %d tasks from PRD", len(tasks)),
+		Tasks:   tasks, // Changed from Epics: epics
 	}
 }
 
@@ -493,7 +362,7 @@ func (a *App) GenerateTasksFromWorkspacePRD(workspaceName string) TaskGeneration
 	}
 
 	// Generate tasks using the PRD content
-	return a.GenerateTasks(string(prdContent))
+	return a.GenerateTasks(string(prdContent)) // Now returns tasks
 }
 
 // GetWorkspaces returns all available workspaces

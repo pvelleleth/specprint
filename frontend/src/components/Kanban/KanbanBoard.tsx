@@ -2,12 +2,11 @@ import React, { useState, useEffect } from 'react';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { EnhancedKanbanColumn } from './EnhancedKanbanColumn';
-import { EpicCard } from './EpicCard';
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { GenerateTasksFromWorkspacePRD, GetWorkspaces } from "../../../wailsjs/go/main/App";
+import { GenerateTasksFromWorkspacePRD } from "../../../wailsjs/go/main/App";
 import { main } from "../../../wailsjs/go/models";
-import { Task, BoardState, ViewMode, Epic, Story } from './types';
+import { Task, BoardState } from './types';
 
 interface KanbanBoardProps {
   selectedWorkspace: main.Workspace | null;
@@ -16,16 +15,11 @@ interface KanbanBoardProps {
 export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
   const [boardState, setBoardState] = useState<BoardState>({ 
     tasks: [], 
-    epics: [], 
-    stories: [], 
     lastUpdated: '' 
   });
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationResult, setGenerationResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [viewMode, setViewMode] = useState<ViewMode>('flat');
-  const [selectedEpicId, setSelectedEpicId] = useState<number | null>(null);
-  const [collapsedStories, setCollapsedStories] = useState<Set<number>>(new Set());
 
   // Load board state from localStorage on component mount
   useEffect(() => {
@@ -37,18 +31,16 @@ export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
           // Ensure backward compatibility with old board state format
           const migratedState: BoardState = {
             tasks: parsed.tasks || [],
-            epics: parsed.epics || [],
-            stories: parsed.stories || [],
             lastUpdated: parsed.lastUpdated || ''
           };
+          
+          // Remove storyId migration
           setBoardState(migratedState);
         } catch (err) {
           console.error('Failed to parse saved board state:', err);
           // Reset to default state if parsing fails
           setBoardState({ 
             tasks: [], 
-            epics: [], 
-            stories: [], 
             lastUpdated: '' 
           });
         }
@@ -81,32 +73,19 @@ export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
     try {
       const result = await GenerateTasksFromWorkspacePRD(selectedWorkspace.name);
       
-      if (result.success && result.epics) {
-        // Flatten the hierarchical structure into tasks with initial status
-        const flatTasks: Task[] = [];
-        
-                 result.epics.forEach((epic: main.Epic) => {
-           epic.stories.forEach((story: main.Story) => {
-             story.tasks.forEach((task: main.Task) => {
-               flatTasks.push({
-                 ...task,
-                 status: 'todo', // All tasks start in todo column
-                 title: task.title.startsWith('[') ? task.title : `[${epic.title}] ${task.title}`,
-                 description: task.description.includes('Epic:') ? task.description : `Epic: ${epic.title} | Story: ${story.title} | ${task.description}`
-               });
-             });
-           });
-         });
+      if (result.success && result.tasks) { // Changed from epics
+        const newTasks = result.tasks.map(task => ({
+          ...task,
+          status: 'todo'
+        }));
 
         const newBoardState: BoardState = {
-          tasks: flatTasks,
-          epics: result.epics,
-          stories: result.epics.flatMap(epic => epic.stories),
+          tasks: newTasks,
           lastUpdated: new Date().toISOString(),
         };
 
         setBoardState(newBoardState);
-        setGenerationResult(`Successfully generated ${flatTasks.length} tasks from ${result.epics.length} epics`);
+        setGenerationResult(`Successfully generated ${newTasks.length} tasks from PRD`);
       } else {
         setError(result.message || 'Failed to generate tasks from PRD');
       }
@@ -119,6 +98,20 @@ export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
 
   const handleTaskMove = (task: Task, sourceColumnId: string, targetColumnId: string) => {
     if (sourceColumnId === targetColumnId) return;
+
+    // Check if task has uncompleted dependencies
+    const hasDependencies = task.dependencies && task.dependencies.length > 0;
+    if (hasDependencies) {
+      const dependencyTasks = boardState.tasks.filter(t => task.dependencies.includes(t.id));
+      const completedDependencies = dependencyTasks.filter(t => t.status === 'done');
+      const allDependenciesCompleted = completedDependencies.length === task.dependencies.length;
+      
+      if (!allDependenciesCompleted && targetColumnId !== 'todo') {
+        // Show error message for blocked tasks
+        setError(`Cannot move task #${task.id} to ${targetColumnId}. Complete dependencies first: ${task.dependencies.join(', ')}`);
+        return;
+      }
+    }
 
     // Map column IDs to status values
     const statusMap: { [key: string]: string } = {
@@ -138,31 +131,14 @@ export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
       tasks: updatedTasks,
       lastUpdated: new Date().toISOString(),
     });
-  };
 
-  const handleToggleStoryCollapse = (storyId: number) => {
-    const newCollapsed = new Set(collapsedStories);
-    if (newCollapsed.has(storyId)) {
-      newCollapsed.delete(storyId);
-    } else {
-      newCollapsed.add(storyId);
-    }
-    setCollapsedStories(newCollapsed);
-  };
-
-  const handleEpicSelect = (epicId: number | null) => {
-    setSelectedEpicId(selectedEpicId === epicId ? null : epicId);
-  };
-
-  const handleViewModeToggle = () => {
-    setViewMode(viewMode === 'flat' ? 'hierarchical' : 'flat');
+    // Clear any previous error messages
+    setError(null);
   };
 
   const clearBoard = () => {
     setBoardState({ 
       tasks: [], 
-      epics: [], 
-      stories: [], 
       lastUpdated: '' 
     });
     if (selectedWorkspace) {
@@ -170,8 +146,6 @@ export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
     }
     setGenerationResult(null);
     setError(null);
-    setSelectedEpicId(null);
-    setCollapsedStories(new Set());
   };
 
   // Group tasks by status for display in columns
@@ -189,6 +163,26 @@ export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
   };
 
   const taskCounts = getTaskCounts();
+
+  // Calculate dependency statistics
+  const getDependencyStats = () => {
+    const tasksWithDependencies = boardState.tasks.filter(task => task.dependencies && task.dependencies.length > 0);
+    const blockedTasks = boardState.tasks.filter(task => {
+      if (!task.dependencies || task.dependencies.length === 0) return false;
+      const dependencyTasks = boardState.tasks.filter(t => task.dependencies.includes(t.id));
+      const completedDependencies = dependencyTasks.filter(t => t.status === 'done');
+      return completedDependencies.length < task.dependencies.length;
+    });
+    
+    return {
+      totalTasks: boardState.tasks.length,
+      tasksWithDependencies: tasksWithDependencies.length,
+      blockedTasks: blockedTasks.length,
+      readyTasks: boardState.tasks.length - blockedTasks.length
+    };
+  };
+
+  const dependencyStats = getDependencyStats();
 
   if (!selectedWorkspace) {
     return (
@@ -243,6 +237,12 @@ export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
                   <div className="text-xs">
                     {taskCounts.inProgress} in progress • {taskCounts.remaining} remaining
                   </div>
+                  {dependencyStats.tasksWithDependencies > 0 && (
+                    <div className="text-xs mt-1">
+                      <span className="text-green-600">{dependencyStats.readyTasks} ready</span> • 
+                      <span className="text-amber-600"> {dependencyStats.blockedTasks} blocked</span>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -273,32 +273,6 @@ export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
 
             {boardState.tasks && boardState.tasks.length > 0 && (
               <>
-                <Button 
-                  onClick={handleViewModeToggle}
-                  variant="outline"
-                  className="flex items-center gap-2"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={
-                      viewMode === 'flat' 
-                        ? "M4 6h16M4 10h16M4 14h16M4 18h16"
-                        : "M19 11H5m14-7H5m14 14H5"
-                    } />
-                  </svg>
-                  {viewMode === 'flat' ? 'Show Stories' : 'Show Flat'}
-                </Button>
-
-                <Button 
-                  onClick={() => handleEpicSelect(null)}
-                  variant={selectedEpicId === null ? "default" : "outline"}
-                  className="flex items-center gap-2"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  All Epics
-                </Button>
-
                 <Button 
                   onClick={clearBoard}
                   variant="outline"
@@ -357,34 +331,51 @@ export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
         </CardContent>
       </Card>
 
-      {/* Epic Overview */}
-      {boardState.epics && boardState.epics.length > 0 && (
+      {/* Dependency Overview */}
+      {boardState.tasks && boardState.tasks.length > 0 && dependencyStats.tasksWithDependencies > 0 && (
         <Card>
           <CardHeader>
-            <div className="flex items-center justify-between">
-              <CardTitle className="flex items-center gap-2">
-                <svg className="w-5 h-5 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11H5m14-7H5m14 14H5" />
-                </svg>
-                Epic Overview
-              </CardTitle>
-                             <span className="text-sm text-gray-600">
-                 {selectedEpicId ? `Filtered by Epic #${selectedEpicId}` : `${boardState.epics?.length || 0} Epics Total`}
-               </span>
-            </div>
+            <CardTitle className="flex items-center gap-2 text-lg">
+              <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+              </svg>
+              Dependency Overview
+            </CardTitle>
           </CardHeader>
           <CardContent>
-                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-               {boardState.epics && boardState.epics.map((epic) => (
-                 <EpicCard
-                   key={epic.id}
-                   epic={epic}
-                   tasks={boardState.tasks || []}
-                   onEpicClick={handleEpicSelect}
-                   isSelected={selectedEpicId === epic.id}
-                 />
-               ))}
-             </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="text-center p-3 bg-blue-50 rounded-lg">
+                <div className="text-2xl font-bold text-blue-600">{dependencyStats.totalTasks}</div>
+                <div className="text-sm text-blue-700">Total Tasks</div>
+              </div>
+              <div className="text-center p-3 bg-green-50 rounded-lg">
+                <div className="text-2xl font-bold text-green-600">{dependencyStats.readyTasks}</div>
+                <div className="text-sm text-green-700">Ready to Start</div>
+              </div>
+              <div className="text-center p-3 bg-amber-50 rounded-lg">
+                <div className="text-2xl font-bold text-amber-600">{dependencyStats.blockedTasks}</div>
+                <div className="text-sm text-amber-700">Blocked</div>
+              </div>
+              <div className="text-center p-3 bg-purple-50 rounded-lg">
+                <div className="text-2xl font-bold text-purple-600">{dependencyStats.tasksWithDependencies}</div>
+                <div className="text-sm text-purple-700">Have Dependencies</div>
+              </div>
+            </div>
+            
+            {dependencyStats.blockedTasks > 0 && (
+              <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+                <div className="flex items-center gap-2 mb-2">
+                  <svg className="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
+                  </svg>
+                  <span className="font-medium text-amber-800">Blocked Tasks</span>
+                </div>
+                <p className="text-sm text-amber-700">
+                  {dependencyStats.blockedTasks} tasks are blocked by incomplete dependencies. 
+                  Complete the prerequisite tasks to unlock them.
+                </p>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -397,34 +388,22 @@ export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
               title="To Do"
               columnId="todo"
               tasks={todoTasks}
-              stories={boardState.stories || []}
-              selectedEpicId={selectedEpicId}
-              viewMode={viewMode}
-              collapsedStories={collapsedStories}
+              allTasks={boardState.tasks}
               onTaskMove={handleTaskMove}
-              onToggleStoryCollapse={handleToggleStoryCollapse}
             />
             <EnhancedKanbanColumn
               title="In Progress"
               columnId="in-progress"
               tasks={inProgressTasks}
-              stories={boardState.stories || []}
-              selectedEpicId={selectedEpicId}
-              viewMode={viewMode}
-              collapsedStories={collapsedStories}
+              allTasks={boardState.tasks}
               onTaskMove={handleTaskMove}
-              onToggleStoryCollapse={handleToggleStoryCollapse}
             />
             <EnhancedKanbanColumn
               title="Done"
               columnId="done"
               tasks={doneTasks}
-              stories={boardState.stories || []}
-              selectedEpicId={selectedEpicId}
-              viewMode={viewMode}
-              collapsedStories={collapsedStories}
+              allTasks={boardState.tasks}
               onTaskMove={handleTaskMove}
-              onToggleStoryCollapse={handleToggleStoryCollapse}
             />
           </div>
         </DndProvider>

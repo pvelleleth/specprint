@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -42,77 +43,69 @@ Build a basic task management web application.
 		return
 	}
 
-	// Verify epics were generated
-	if len(result.Epics) == 0 {
-		t.Error("Expected epics to be generated, got empty array")
+	// Verify tasks were generated
+	if len(result.Tasks) == 0 {
+		t.Error("Expected tasks to be generated, got empty array")
 		return
 	}
 
-	// Verify epic structure and count total tasks
-	totalTasks := 0
-	for i, epic := range result.Epics {
-		if epic.ID <= 0 {
-			t.Errorf("Epic %d has invalid ID: %d", i, epic.ID)
+	// Verify task structure
+	for i, task := range result.Tasks {
+		if task.ID <= 0 {
+			t.Errorf("Task %d has invalid ID: %d", i, task.ID)
 		}
-		if strings.TrimSpace(epic.Title) == "" {
-			t.Errorf("Epic %d has empty title", epic.ID)
+		if strings.TrimSpace(task.Title) == "" {
+			t.Errorf("Task %d has empty title", task.ID)
 		}
-		if strings.TrimSpace(epic.Description) == "" {
-			t.Errorf("Epic %d has empty description", epic.ID)
+		if strings.TrimSpace(task.Description) == "" {
+			t.Errorf("Task %d has empty description", task.ID)
+		}
+		if strings.TrimSpace(task.Priority) == "" {
+			t.Errorf("Task %d has empty priority", task.ID)
+		}
+		if strings.TrimSpace(task.Estimate) == "" {
+			t.Errorf("Task %d has empty estimate", task.ID)
+		}
+		if task.Dependencies == nil {
+			t.Errorf("Task %d has nil dependencies", task.ID)
 		}
 
-		// Verify stories within epic
-		for j, story := range epic.Stories {
-			if story.ID <= 0 {
-				t.Errorf("Story %d in Epic %d has invalid ID: %d", j, epic.ID, story.ID)
+		// Verify priority is valid
+		validPriorities := []string{"high", "medium", "low"}
+		priorityValid := false
+		for _, validPriority := range validPriorities {
+			if strings.ToLower(task.Priority) == validPriority {
+				priorityValid = true
+				break
 			}
-			if story.EpicID != epic.ID {
-				t.Errorf("Story %d has incorrect epicId: expected %d, got %d", story.ID, epic.ID, story.EpicID)
-			}
-			if strings.TrimSpace(story.Title) == "" {
-				t.Errorf("Story %d in Epic %d has empty title", story.ID, epic.ID)
-			}
-			if strings.TrimSpace(story.Description) == "" {
-				t.Errorf("Story %d in Epic %d has empty description", story.ID, epic.ID)
-			}
+		}
+		if !priorityValid {
+			t.Errorf("Task %d has invalid priority: %s", task.ID, task.Priority)
+		}
 
-			// Verify tasks within story
-			for k, task := range story.Tasks {
-				if task.ID <= 0 {
-					t.Errorf("Task %d in Story %d has invalid ID: %d", k, story.ID, task.ID)
+		// Verify dependencies reference valid task IDs
+		for _, depID := range task.Dependencies {
+			found := false
+			for _, otherTask := range result.Tasks {
+				if otherTask.ID == depID {
+					found = true
+					break
 				}
-				if task.StoryID != story.ID {
-					t.Errorf("Task %d has incorrect storyId: expected %d, got %d", task.ID, story.ID, task.StoryID)
-				}
-				if strings.TrimSpace(task.Title) == "" {
-					t.Errorf("Task %d in Story %d has empty title", task.ID, story.ID)
-				}
-				if strings.TrimSpace(task.Description) == "" {
-					t.Errorf("Task %d in Story %d has empty description", task.ID, story.ID)
-				}
-				if strings.TrimSpace(task.Priority) == "" {
-					t.Errorf("Task %d in Story %d has empty priority", task.ID, story.ID)
-				}
-				if strings.TrimSpace(task.Estimate) == "" {
-					t.Errorf("Task %d in Story %d has empty estimate", task.ID, story.ID)
-				}
-				if task.Dependencies == nil {
-					t.Errorf("Task %d in Story %d has nil dependencies", task.ID, story.ID)
-				}
-				totalTasks++
+			}
+			if !found {
+				t.Errorf("Task %d references non-existent dependency: %d", task.ID, depID)
 			}
 		}
 	}
 
-	t.Logf("✅ Successfully generated %d epics with %d total tasks", len(result.Epics), totalTasks)
-	for _, epic := range result.Epics {
-		t.Logf("Epic %d: %s", epic.ID, epic.Title)
-		for _, story := range epic.Stories {
-			t.Logf("  Story %d: %s", story.ID, story.Title)
-			for _, task := range story.Tasks {
-				t.Logf("    Task %d: %s (%s priority, %s estimate)", task.ID, task.Title, task.Priority, task.Estimate)
-			}
+	t.Logf("✅ Successfully generated %d tasks", len(result.Tasks))
+	for _, task := range result.Tasks {
+		deps := "none"
+		if len(task.Dependencies) > 0 {
+			deps = fmt.Sprintf("%v", task.Dependencies)
 		}
+		t.Logf("Task %d: %s (%s priority, %s estimate, deps: %s)",
+			task.ID, task.Title, task.Priority, task.Estimate, deps)
 	}
 }
 
@@ -173,117 +166,5 @@ func TestGenerateTasksFromWorkspacePRDEmptyName(t *testing.T) {
 
 	if !strings.Contains(result.Message, "empty") {
 		t.Errorf("Expected error message about empty workspace name, got: %s", result.Message)
-	}
-}
-
-func TestFlattenTasks(t *testing.T) {
-	app := NewApp()
-
-	// Create sample epics structure
-	epics := []Epic{
-		{
-			ID:          1,
-			Title:       "User Auth",
-			Description: "Authentication system",
-			Stories: []Story{
-				{
-					ID:          1,
-					EpicID:      1,
-					Title:       "Login",
-					Description: "User login functionality",
-					Tasks: []Task{
-						{
-							ID:           1,
-							StoryID:      1,
-							Title:        "Login Form",
-							Description:  "Create login form",
-							Dependencies: []int{},
-							Priority:     "high",
-							Estimate:     "4h",
-						},
-					},
-				},
-			},
-		},
-	}
-
-	flatTasks := app.FlattenTasks(epics)
-
-	if len(flatTasks) != 1 {
-		t.Errorf("Expected 1 flattened task, got %d", len(flatTasks))
-	}
-
-	expectedTitle := "[User Auth] Login Form"
-	if flatTasks[0].Title != expectedTitle {
-		t.Errorf("Expected title '%s', got '%s'", expectedTitle, flatTasks[0].Title)
-	}
-
-	expectedDesc := "Epic: User Auth | Story: Login | Create login form"
-	if flatTasks[0].Description != expectedDesc {
-		t.Errorf("Expected description '%s', got '%s'", expectedDesc, flatTasks[0].Description)
-	}
-}
-
-func TestGetTaskSummary(t *testing.T) {
-	app := NewApp()
-
-	// Create sample epics structure
-	epics := []Epic{
-		{
-			ID:          1,
-			Title:       "User Auth",
-			Description: "Authentication system",
-			Stories: []Story{
-				{
-					ID:          1,
-					EpicID:      1,
-					Title:       "Login",
-					Description: "User login functionality",
-					Tasks: []Task{
-						{
-							ID:           1,
-							StoryID:      1,
-							Title:        "Login Form",
-							Description:  "Create login form",
-							Dependencies: []int{},
-							Priority:     "high",
-							Estimate:     "4h",
-						},
-						{
-							ID:           2,
-							StoryID:      1,
-							Title:        "API Integration",
-							Description:  "Connect to auth API",
-							Dependencies: []int{1},
-							Priority:     "medium",
-							Estimate:     "2d",
-						},
-					},
-				},
-			},
-		},
-	}
-
-	summary := app.GetTaskSummary(epics)
-
-	if summary["totalEpics"] != 1 {
-		t.Errorf("Expected 1 epic, got %v", summary["totalEpics"])
-	}
-
-	if summary["totalStories"] != 1 {
-		t.Errorf("Expected 1 story, got %v", summary["totalStories"])
-	}
-
-	if summary["totalTasks"] != 2 {
-		t.Errorf("Expected 2 tasks, got %v", summary["totalTasks"])
-	}
-
-	priorityCounts := summary["priorityCounts"].(map[string]int)
-	if priorityCounts["high"] != 1 {
-		t.Errorf("Expected 1 high priority task, got %d", priorityCounts["high"])
-	}
-
-	if priorityCounts["medium"] != 1 {
-		t.Errorf("Expected 1 medium priority task, got %d", priorityCounts["medium"])
 	}
 }
