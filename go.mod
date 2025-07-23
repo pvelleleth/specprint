@@ -8,6 +8,7 @@ require (
 	github.com/go-git/go-git/v5 v5.16.2
 	github.com/sashabaranov/go-openai v1.40.5
 	github.com/wailsapp/wails/v2 v2.10.2
+	github.com/yukifoo/claude-code-sdk-go v0.0.0-20250618211252-be3af0d0e1b6
 )
 
 require (

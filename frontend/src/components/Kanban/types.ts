@@ -10,6 +10,9 @@ export interface Task {
   priority: string;
   estimate: string;
   status: string;
+  isRunning?: boolean; // Add running state for individual tasks
+  worktreePath?: string; // Add worktree path for tracking active worktrees
+  sessionId?: string;
 }
 
 export interface BoardState {

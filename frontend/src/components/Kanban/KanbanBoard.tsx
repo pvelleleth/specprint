@@ -2,14 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { EnhancedKanbanColumn } from './EnhancedKanbanColumn';
-import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { GenerateTasksFromWorkspacePRD } from "../../../wailsjs/go/main/App";
-import { main } from "../../../wailsjs/go/models";
+import { TaskEditModal } from './TaskEditModal';
+import { GenerateTasksFromWorkspacePRD, StartTaskConversation, CleanupTaskWorktree, ContinueClaudeSession } from "../../../wailsjs/go/main/App";
 import { Task, BoardState } from './types';
 
 interface KanbanBoardProps {
-  selectedWorkspace: main.Workspace | null;
+  selectedWorkspace: any;
 }
 
 export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
@@ -20,6 +18,10 @@ export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationResult, setGenerationResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [runTaskResult, setRunTaskResult] = useState<string | null>(null);
 
   // Load board state from localStorage on component mount
   useEffect(() => {
@@ -28,17 +30,13 @@ export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
       if (saved) {
         try {
           const parsed = JSON.parse(saved);
-          // Ensure backward compatibility with old board state format
           const migratedState: BoardState = {
             tasks: parsed.tasks || [],
             lastUpdated: parsed.lastUpdated || ''
           };
-          
-          // Remove storyId migration
           setBoardState(migratedState);
         } catch (err) {
           console.error('Failed to parse saved board state:', err);
-          // Reset to default state if parsing fails
           setBoardState({ 
             tasks: [], 
             lastUpdated: '' 
@@ -55,14 +53,9 @@ export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
     }
   }, [boardState, selectedWorkspace]);
 
-  const generateTasksFromPRD = async () => {
+  const generateTasks = async () => {
     if (!selectedWorkspace) {
       setError('No workspace selected');
-      return;
-    }
-
-    if (!selectedWorkspace.hasPrd) {
-      setError('Selected workspace does not have a PRD. Please create a PRD first.');
       return;
     }
 
@@ -73,33 +66,33 @@ export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
     try {
       const result = await GenerateTasksFromWorkspacePRD(selectedWorkspace.name);
       
-      if (result.success && result.tasks) { // Changed from epics
-        const newTasks = result.tasks.map(task => ({
+      if (result.success && result.tasks) {
+        const tasksWithStatus = result.tasks.map((task: any) => ({
           ...task,
-          status: 'todo'
+          status: 'todo',
+          isRunning: false // Initialize isRunning state
         }));
 
-        const newBoardState: BoardState = {
-          tasks: newTasks,
+        setBoardState({
+          tasks: tasksWithStatus,
           lastUpdated: new Date().toISOString(),
-        };
+        });
 
-        setBoardState(newBoardState);
-        setGenerationResult(`Successfully generated ${newTasks.length} tasks from PRD`);
+        setGenerationResult(`Successfully generated ${result.tasks.length} tasks from PRD!`);
       } else {
-        setError(result.message || 'Failed to generate tasks from PRD');
+        setError(result.message || 'Failed to generate tasks');
       }
     } catch (err) {
-      setError(`Error generating tasks: ${err instanceof Error ? err.message : 'Unknown error'}`);
+      console.error('Error generating tasks:', err);
+      setError('An unexpected error occurred while generating tasks');
     } finally {
       setIsGenerating(false);
     }
   };
 
-  const handleTaskMove = (task: Task, sourceColumnId: string, targetColumnId: string) => {
+  const handleTaskMove = async (task: Task, sourceColumnId: string, targetColumnId: string) => {
     if (sourceColumnId === targetColumnId) return;
 
-    // Check if task has uncompleted dependencies
     const hasDependencies = task.dependencies && task.dependencies.length > 0;
     if (hasDependencies) {
       const dependencyTasks = boardState.tasks.filter(t => task.dependencies.includes(t.id));
@@ -107,13 +100,11 @@ export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
       const allDependenciesCompleted = completedDependencies.length === task.dependencies.length;
       
       if (!allDependenciesCompleted && targetColumnId !== 'todo') {
-        // Show error message for blocked tasks
         setError(`Cannot move task #${task.id} to ${targetColumnId}. Complete dependencies first: ${task.dependencies.join(', ')}`);
         return;
       }
     }
 
-    // Map column IDs to status values
     const statusMap: { [key: string]: string } = {
       'todo': 'todo',
       'in-progress': 'in-progress',
@@ -132,304 +123,522 @@ export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
       lastUpdated: new Date().toISOString(),
     });
 
-    // Clear any previous error messages
     setError(null);
+
+    if (targetColumnId === 'done') {
+      try {
+        await CleanupTaskWorktree(selectedWorkspace.name, task.id);
+        console.log(`Worktree for task ${task.id} cleaned up.`);
+        
+        // Update task status and clear worktree path after successful cleanup
+        const updatedTasks = boardState.tasks.map(t => 
+          t.id === task.id 
+            ? { ...t, status: targetColumnId, worktreePath: undefined }
+            : t
+        );
+
+        setBoardState({
+          ...boardState,
+          tasks: updatedTasks,
+          lastUpdated: new Date().toISOString(),
+        });
+      } catch (err) {
+        console.error(`Error cleaning up worktree for task ${task.id}:`, err);
+        setError(`Failed to clean up worktree for task ${task.id}`);
+        
+        // Still update the status even if cleanup failed
+        const updatedTasks = boardState.tasks.map(t => 
+          t.id === task.id 
+            ? { ...t, status: targetColumnId }
+            : t
+        );
+
+        setBoardState({
+          ...boardState,
+          tasks: updatedTasks,
+          lastUpdated: new Date().toISOString(),
+        });
+      }
+    } else {
+      // Normal task move without cleanup
+      const updatedTasks = boardState.tasks.map(t => 
+        t.id === task.id 
+          ? { ...t, status: targetColumnId }
+          : t
+      );
+
+      setBoardState({
+        ...boardState,
+        tasks: updatedTasks,
+        lastUpdated: new Date().toISOString(),
+      });
+    }
+  };
+
+  // Handle task status updates with worktree cleanup
+  const handleTaskStatusUpdate = async (taskId: number, newStatus: string) => {
+    // Clean up worktree if task is marked as done
+    if (newStatus === 'done' && selectedWorkspace) {
+      try {
+        await CleanupTaskWorktree(selectedWorkspace.name, taskId);
+        console.log(`Worktree for task ${taskId} cleaned up after marking as done.`);
+        
+        // Update task status and clear worktree path after successful cleanup
+        const updatedTasks = boardState.tasks.map(t => 
+          t.id === taskId 
+            ? { ...t, status: newStatus, worktreePath: undefined }
+            : t
+        );
+
+        setBoardState({
+          ...boardState,
+          tasks: updatedTasks,
+          lastUpdated: new Date().toISOString(),
+        });
+      } catch (err) {
+        console.error(`Error cleaning up worktree for task ${taskId}:`, err);
+        setError(`Task marked as done but failed to clean up worktree: ${err}`);
+        
+        // Still update the status even if cleanup failed
+        const updatedTasks = boardState.tasks.map(t => 
+          t.id === taskId 
+            ? { ...t, status: newStatus }
+            : t
+        );
+
+        setBoardState({
+          ...boardState,
+          tasks: updatedTasks,
+          lastUpdated: new Date().toISOString(),
+        });
+      }
+    } else {
+      // Normal status update without cleanup
+      const updatedTasks = boardState.tasks.map(t => 
+        t.id === taskId 
+          ? { ...t, status: newStatus }
+          : t
+      );
+
+      setBoardState({
+        ...boardState,
+        tasks: updatedTasks,
+        lastUpdated: new Date().toISOString(),
+      });
+    }
+  };
+
+  const handleEditTask = (task: Task) => {
+    setEditingTask(task);
+    setIsEditModalOpen(true);
+  };
+
+  const handleSaveTask = (updatedTask: Task) => {
+    if (editingTask) {
+      // Editing existing task
+      const updatedTasks = boardState.tasks.map(t => 
+        t.id === updatedTask.id ? updatedTask : t
+      );
+
+      setBoardState({
+        ...boardState,
+        tasks: updatedTasks,
+        lastUpdated: new Date().toISOString(),
+      });
+
+      setEditingTask(null);
+      setIsEditModalOpen(false);
+    } else {
+      // Creating new task
+      setBoardState({
+        ...boardState,
+        tasks: [...boardState.tasks, updatedTask],
+        lastUpdated: new Date().toISOString(),
+      });
+
+      setIsCreateModalOpen(false);
+    }
+  };
+
+  const handleCloseEditModal = () => {
+    setEditingTask(null);
+    setIsEditModalOpen(false);
+  };
+
+  const handleOpenCreateModal = () => {
+    setIsCreateModalOpen(true);
+  };
+
+  const handleCloseCreateModal = () => {
+    setIsCreateModalOpen(false);
+  };
+
+  const handleRunTask = async (task: Task, baseBranch: string) => {
+    if (!selectedWorkspace) {
+      setError('No workspace selected');
+      return;
+    }
+
+    if (!baseBranch) {
+      setError('Base branch must be selected');
+      return;
+    }
+
+    const hasDependencies = task.dependencies && task.dependencies.length > 0;
+    if (hasDependencies) {
+      const dependencyTasks = boardState.tasks.filter(t => task.dependencies.includes(t.id));
+      const completedDependencies = dependencyTasks.filter(t => t.status === 'done');
+      const allDependenciesCompleted = completedDependencies.length === task.dependencies.length;
+      
+      if (!allDependenciesCompleted) {
+        setError(`Cannot run task #${task.id}. Complete dependencies first: ${task.dependencies.join(', ')}`);
+        return;
+      }
+    }
+
+    setError(null);
+    setRunTaskResult(null);
+
+    // Set the task as running
+    const updatedTasks = boardState.tasks.map(t => 
+      t.id === task.id 
+        ? { ...t, isRunning: true }
+        : t
+    );
+
+    setBoardState({
+      ...boardState,
+      tasks: updatedTasks,
+      lastUpdated: new Date().toISOString(),
+    });
+
+    try {
+      const result = await StartTaskConversation(selectedWorkspace.name, task.id, task.title, task.description, baseBranch);
+      
+      if (result.success) {
+        setRunTaskResult(`Successfully started task conversation ${task.id} on branch '${result.branchName}' (based on '${baseBranch}'). ${result.message}`);
+        
+        // Update task to in-progress and stop running state, add worktree path and session details
+        const finalUpdatedTasks = boardState.tasks.map(t => 
+          t.id === task.id 
+            ? { 
+                ...t, 
+                status: 'in-progress', 
+                isRunning: false, 
+                worktreePath: result.worktreePath || `task-${task.id}-${selectedWorkspace.name}`,
+                sessionId: result.sessionId
+              }
+            : t
+        );
+
+        setBoardState({
+          ...boardState,
+          tasks: finalUpdatedTasks,
+          lastUpdated: new Date().toISOString(),
+        });
+      } else {
+        setError(result.message || 'Failed to start task conversation');
+        // Just stop running state on failure
+        const failedUpdatedTasks = boardState.tasks.map(t => 
+          t.id === task.id 
+            ? { ...t, isRunning: false }
+            : t
+        );
+        setBoardState({
+          ...boardState,
+          tasks: failedUpdatedTasks,
+          lastUpdated: new Date().toISOString(),
+        });
+      }
+    } catch (err) {
+      console.error('Error starting task conversation:', err);
+      setError('An unexpected error occurred while starting the task conversation');
+      // Stop running state on error
+      const errorUpdatedTasks = boardState.tasks.map(t => 
+        t.id === task.id 
+          ? { ...t, isRunning: false }
+          : t
+      );
+      setBoardState({
+        ...boardState,
+        tasks: errorUpdatedTasks,
+        lastUpdated: new Date().toISOString(),
+      });
+    }
+  };
+
+  const handleAskForChanges = async (task: Task, prompt: string) => {
+    if (!task.sessionId || !selectedWorkspace) {
+      throw new Error('No session ID available for this task');
+    }
+
+    try {
+      // Use the simplified ContinueClaudeSession function (only sessionId and userMessage)
+      const result = await ContinueClaudeSession(task.sessionId, prompt);
+      
+      if (result.success) {
+        // Update task status to in-progress if it was done
+        const updatedTasks = boardState.tasks.map(t => 
+          t.id === task.id 
+            ? { ...t, status: t.status === 'done' ? 'in-progress' : t.status }
+            : t
+        );
+
+        setBoardState({
+          ...boardState,
+          tasks: updatedTasks,
+          lastUpdated: new Date().toISOString(),
+        });
+      } else {
+        throw new Error(result.message);
+      }
+    } catch (error) {
+      console.error('Error continuing Claude session:', error);
+      throw error;
+    }
   };
 
   const clearBoard = () => {
-    setBoardState({ 
-      tasks: [], 
-      lastUpdated: '' 
+    setBoardState({
+      tasks: [],
+      lastUpdated: new Date().toISOString(),
     });
-    if (selectedWorkspace) {
-      localStorage.removeItem(`kanban-${selectedWorkspace.name}`);
-    }
     setGenerationResult(null);
     setError(null);
+    setRunTaskResult(null);
   };
 
-  // Group tasks by status for display in columns
-  const todoTasks = (boardState.tasks || []).filter(task => task.status === 'todo');
-  const inProgressTasks = (boardState.tasks || []).filter(task => task.status === 'in-progress');
-  const doneTasks = (boardState.tasks || []).filter(task => task.status === 'done');
-
-  const getTaskCounts = () => {
-    const total = (boardState.tasks || []).length;
-    const completed = doneTasks.length;
-    const inProgress = inProgressTasks.length;
-    const remaining = todoTasks.length;
-    
-    return { total, completed, inProgress, remaining };
-  };
-
-  const taskCounts = getTaskCounts();
-
-  // Calculate dependency statistics
-  const getDependencyStats = () => {
-    const tasksWithDependencies = boardState.tasks.filter(task => task.dependencies && task.dependencies.length > 0);
-    const blockedTasks = boardState.tasks.filter(task => {
-      if (!task.dependencies || task.dependencies.length === 0) return false;
-      const dependencyTasks = boardState.tasks.filter(t => task.dependencies.includes(t.id));
-      const completedDependencies = dependencyTasks.filter(t => t.status === 'done');
-      return completedDependencies.length < task.dependencies.length;
-    });
-    
-    return {
-      totalTasks: boardState.tasks.length,
-      tasksWithDependencies: tasksWithDependencies.length,
-      blockedTasks: blockedTasks.length,
-      readyTasks: boardState.tasks.length - blockedTasks.length
-    };
-  };
-
-  const dependencyStats = getDependencyStats();
+  // Calculate statistics
+  const totalTasks = boardState.tasks.length;
+  const tasksWithDependencies = boardState.tasks.filter(task => task.dependencies && task.dependencies.length > 0);
+  const readyTasks = boardState.tasks.filter(task => {
+    if (!task.dependencies || task.dependencies.length === 0) return true;
+    const dependencyTasks = boardState.tasks.filter(t => task.dependencies.includes(t.id));
+    const completedDependencies = dependencyTasks.filter(t => t.status === 'done');
+    return completedDependencies.length === task.dependencies.length;
+  });
+  const blockedTasks = boardState.tasks.filter(task => {
+    if (!task.dependencies || task.dependencies.length === 0) return false;
+    const dependencyTasks = boardState.tasks.filter(t => task.dependencies.includes(t.id));
+    const completedDependencies = dependencyTasks.filter(t => t.status === 'done');
+    return completedDependencies.length !== task.dependencies.length;
+  });
 
   if (!selectedWorkspace) {
     return (
-      <Card className="w-full max-w-4xl mx-auto">
-        <CardHeader>
-          <CardTitle>Kanban Board</CardTitle>
-          <CardDescription>
-            Please select a workspace from the sidebar to view or generate tasks.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="text-center py-12">
-          <div className="max-w-md mx-auto">
-            <div className="w-16 h-16 bg-muted rounded-full flex items-center justify-center mx-auto mb-4">
-              <svg className="w-8 h-8 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 002 2m0 0v10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2h2a2 2 0 002-2" />
-              </svg>
-            </div>
-            <h3 className="text-lg font-medium mb-2">No Workspace Selected</h3>
-            <p className="text-muted-foreground">
-              Select a workspace to view your project tasks and Kanban board.
-            </p>
-          </div>
-        </CardContent>
-      </Card>
+      <div className="flex items-center justify-center h-64">
+        <p className="text-gray-500 text-lg">Select a workspace to view its Kanban board</p>
+      </div>
     );
   }
 
   return (
-    <div className="w-full space-y-6">
-      {/* Header Section */}
-      <Card>
-        <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 17V7m0 10a2 2 0 01-2 2H5a2 2 0 01-2-2V7a2 2 0 012-2h2a2 2 0 012 2m0 10a2 2 0 002 2h2a2 2 0 002-2M9 7a2 2 0 012-2h2a2 2 0 002 2m0 0v10a2 2 0 002 2h2a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2h2a2 2 0 002-2" />
-                </svg>
-                Kanban Board
-              </CardTitle>
-                             <CardDescription>
-                 Project tasks for {selectedWorkspace.name}
-               </CardDescription>
-            </div>
-            
-            <div className="flex items-center gap-3">
-              {boardState.tasks && boardState.tasks.length > 0 && (
-                <div className="text-sm text-gray-600 text-right">
-                  <div className="font-medium">
-                    {taskCounts.completed}/{taskCounts.total} tasks completed
-                  </div>
-                  <div className="text-xs">
-                    {taskCounts.inProgress} in progress • {taskCounts.remaining} remaining
-                  </div>
-                  {dependencyStats.tasksWithDependencies > 0 && (
-                    <div className="text-xs mt-1">
-                      <span className="text-green-600">{dependencyStats.readyTasks} ready</span> • 
-                      <span className="text-amber-600"> {dependencyStats.blockedTasks} blocked</span>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </div>
-        </CardHeader>
-        
-        <CardContent>
-          <div className="flex flex-wrap gap-3">
-            <Button 
-              onClick={generateTasksFromPRD}
-              disabled={isGenerating || !selectedWorkspace.hasPrd}
-              className="flex items-center gap-2"
-            >
-              {isGenerating ? (
-                <>
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                  Generating Tasks...
-                </>
-              ) : (
-                <>
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                  </svg>
-                  {boardState.tasks && boardState.tasks.length > 0 ? 'Regenerate from PRD' : 'Generate from PRD'}
-                </>
-              )}
-            </Button>
-
-            {boardState.tasks && boardState.tasks.length > 0 && (
-              <>
-                <Button 
-                  onClick={clearBoard}
-                  variant="outline"
-                  className="flex items-center gap-2"
-                >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                  </svg>
-                  Clear Board
-                </Button>
-              </>
+    <div className="h-full flex flex-col bg-gray-50">
+      {/* Header */}
+      <div className="bg-white border-b border-gray-200 p-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-2xl font-bold text-gray-900">
+              {selectedWorkspace.name} - Kanban Board
+            </h2>
+            {boardState.tasks.length > 0 && (
+              <div className="mt-2 flex items-center gap-4 text-sm text-gray-600">
+                <span>
+                  {boardState.tasks.filter(t => t.status === 'done').length} / {totalTasks} completed
+                </span>
+                <span>
+                  {boardState.tasks.filter(t => t.status === 'in-progress').length} in progress
+                </span>
+                <span>
+                  {boardState.tasks.filter(t => t.status === 'todo').length} remaining
+                </span>
+                {tasksWithDependencies.length > 0 && (
+                  <>
+                    <span className="text-green-600">
+                      {readyTasks.length} ready
+                    </span>
+                    <span className="text-red-600">
+                      {blockedTasks.length} blocked
+                    </span>
+                  </>
+                )}
+              </div>
             )}
           </div>
+          <div className="flex gap-2">
+            <button
+              onClick={handleOpenCreateModal}
+              className="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 flex items-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6v6m0 0v6m0-6h6m-6 0H6" />
+              </svg>
+              Add Task
+            </button>
+            <button
+              onClick={generateTasks}
+              disabled={isGenerating || !selectedWorkspace?.hasPrd}
+              className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {isGenerating ? 'Generating...' : 'Generate from PRD'}
+            </button>
+            <button
+              onClick={clearBoard}
+              className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700"
+            >
+              Clear Board
+            </button>
+          </div>
+        </div>
 
-          {!selectedWorkspace.hasPrd && (
-            <div className="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-              <div className="flex items-center gap-2">
-                <svg className="w-4 h-4 text-yellow-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.664-.833-2.464 0L3.34 16.5c-.77.833.192 2.5 1.732 2.5z" />
-                </svg>
-                <p className="text-sm text-yellow-800 font-medium">
-                  This workspace doesn't have a PRD yet. Create a PRD first to generate tasks.
-                </p>
-              </div>
-            </div>
-          )}
+        {!selectedWorkspace?.hasPrd && (
+          <div className="mt-2 p-2 bg-yellow-100 border border-yellow-300 rounded text-yellow-800 text-sm">
+            This workspace doesn't have a PRD file. Create one first to generate tasks.
+          </div>
+        )}
+      </div>
 
-          {/* Status Messages */}
+      {/* Status Messages */}
+      {(error || generationResult || runTaskResult) && (
+        <div className="p-4 border-b border-gray-200">
           {error && (
-            <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
-              <div className="flex items-start gap-2">
-                <svg className="w-5 h-5 text-red-500 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <div>
-                  <p className="font-medium text-red-800">Error</p>
-                  <p className="text-sm text-red-700 mt-1">{error}</p>
-                </div>
-              </div>
+            <div className="p-3 bg-red-100 border border-red-300 rounded text-red-800 text-sm mb-2">
+              {error}
+              <button
+                onClick={() => setError(null)}
+                className="ml-2 text-red-600 hover:text-red-800"
+              >
+                ✕
+              </button>
+            </div>
+          )}
+          
+          {generationResult && (
+            <div className="p-3 bg-green-100 border border-green-300 rounded text-green-800 text-sm mb-2">
+              {generationResult}
+              <button
+                onClick={() => setGenerationResult(null)}
+                className="ml-2 text-green-600 hover:text-green-800"
+              >
+                ✕
+              </button>
             </div>
           )}
 
-          {generationResult && (
-            <div className="mt-4 p-4 bg-green-50 border border-green-200 rounded-lg">
-              <div className="flex items-start gap-2">
-                <svg className="w-5 h-5 text-green-500 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <div>
-                  <p className="font-medium text-green-800">Success!</p>
-                  <p className="text-sm text-green-700 mt-1">{generationResult}</p>
-                </div>
-              </div>
+          {runTaskResult && (
+            <div className="p-3 bg-blue-100 border border-blue-300 rounded text-blue-800 text-sm">
+              {runTaskResult}
+              <button
+                onClick={() => setRunTaskResult(null)}
+                className="ml-2 text-blue-600 hover:text-blue-800"
+              >
+                ✕
+              </button>
             </div>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      )}
 
       {/* Dependency Overview */}
-      {boardState.tasks && boardState.tasks.length > 0 && dependencyStats.tasksWithDependencies > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2 text-lg">
-              <svg className="w-5 h-5 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-              </svg>
-              Dependency Overview
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="text-center p-3 bg-blue-50 rounded-lg">
-                <div className="text-2xl font-bold text-blue-600">{dependencyStats.totalTasks}</div>
-                <div className="text-sm text-blue-700">Total Tasks</div>
-              </div>
-              <div className="text-center p-3 bg-green-50 rounded-lg">
-                <div className="text-2xl font-bold text-green-600">{dependencyStats.readyTasks}</div>
-                <div className="text-sm text-green-700">Ready to Start</div>
-              </div>
-              <div className="text-center p-3 bg-amber-50 rounded-lg">
-                <div className="text-2xl font-bold text-amber-600">{dependencyStats.blockedTasks}</div>
-                <div className="text-sm text-amber-700">Blocked</div>
-              </div>
-              <div className="text-center p-3 bg-purple-50 rounded-lg">
-                <div className="text-2xl font-bold text-purple-600">{dependencyStats.tasksWithDependencies}</div>
-                <div className="text-sm text-purple-700">Have Dependencies</div>
-              </div>
+      {totalTasks > 0 && tasksWithDependencies.length > 0 && (
+        <div className="p-4 border-b border-gray-200 bg-gray-50">
+          <h3 className="text-sm font-medium text-gray-700 mb-2">Dependency Overview</h3>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+            <div className="bg-white p-2 rounded border">
+              <div className="font-medium text-gray-900">{totalTasks}</div>
+              <div className="text-gray-600">Total Tasks</div>
             </div>
-            
-            {dependencyStats.blockedTasks > 0 && (
-              <div className="mt-4 p-3 bg-amber-50 border border-amber-200 rounded-lg">
-                <div className="flex items-center gap-2 mb-2">
-                  <svg className="w-4 h-4 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16.5c-.77.833.192 2.5 1.732 2.5z" />
-                  </svg>
-                  <span className="font-medium text-amber-800">Blocked Tasks</span>
-                </div>
-                <p className="text-sm text-amber-700">
-                  {dependencyStats.blockedTasks} tasks are blocked by incomplete dependencies. 
-                  Complete the prerequisite tasks to unlock them.
-                </p>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+            <div className="bg-white p-2 rounded border">
+              <div className="font-medium text-green-600">{readyTasks.length}</div>
+              <div className="text-gray-600">Ready to Start</div>
+            </div>
+            <div className="bg-white p-2 rounded border">
+              <div className="font-medium text-red-600">{blockedTasks.length}</div>
+              <div className="text-gray-600">Blocked</div>
+            </div>
+            <div className="bg-white p-2 rounded border">
+              <div className="font-medium text-blue-600">{tasksWithDependencies.length}</div>
+              <div className="text-gray-600">Have Dependencies</div>
+            </div>
+          </div>
+          {blockedTasks.length > 0 && (
+            <div className="mt-2 text-xs text-amber-600">
+              ⚠️ {blockedTasks.length} task(s) are waiting for dependencies to be completed
+            </div>
+          )}
+        </div>
       )}
 
       {/* Kanban Board */}
-      {boardState.tasks && boardState.tasks.length > 0 && (
-        <DndProvider backend={HTML5Backend}>
-          <div className="flex gap-6 overflow-x-auto pb-4">
-            <EnhancedKanbanColumn
-              title="To Do"
-              columnId="todo"
-              tasks={todoTasks}
-              allTasks={boardState.tasks}
-              onTaskMove={handleTaskMove}
-            />
-            <EnhancedKanbanColumn
-              title="In Progress"
-              columnId="in-progress"
-              tasks={inProgressTasks}
-              allTasks={boardState.tasks}
-              onTaskMove={handleTaskMove}
-            />
-            <EnhancedKanbanColumn
-              title="Done"
-              columnId="done"
-              tasks={doneTasks}
-              allTasks={boardState.tasks}
-              onTaskMove={handleTaskMove}
-            />
-          </div>
-        </DndProvider>
-      )}
-
-      {/* Empty State */}
-      {(!boardState.tasks || boardState.tasks.length === 0) && !isGenerating && (
-        <Card>
-          <CardContent className="text-center py-12">
-            <div className="max-w-md mx-auto">
-              <div className="w-16 h-16 bg-muted rounded-full flex items-center justify-center mx-auto mb-4">
-                <svg className="w-8 h-8 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-3 7h3m-3 4h3m-6-4h.01M9 16h.01" />
-                </svg>
-              </div>
-              <h3 className="text-lg font-medium mb-2">No Tasks Yet</h3>
-              <p className="text-muted-foreground mb-4">
-                {selectedWorkspace.hasPrd 
-                  ? 'Generate tasks from your PRD to get started with project management.'
-                  : 'Create a PRD first, then generate tasks to populate your Kanban board.'
-                }
-              </p>
+      <div className="flex-1 overflow-hidden">
+        {boardState.tasks.length === 0 ? (
+          <div className="flex items-center justify-center h-full">
+            <div className="text-center">
+              <p className="text-gray-500 text-lg mb-4">No tasks generated yet</p>
+              {selectedWorkspace?.hasPrd ? (
+                <p className="text-gray-400">Click "Generate from PRD" to create tasks from your PRD</p>
+              ) : (
+                <p className="text-gray-400">Create a PRD first, then generate tasks</p>
+              )}
             </div>
-          </CardContent>
-        </Card>
-      )}
+          </div>
+        ) : (
+          <DndProvider backend={HTML5Backend}>
+            <div className="h-full flex gap-6 p-6 overflow-x-auto">
+              <EnhancedKanbanColumn
+                title="To Do"
+                tasks={boardState.tasks.filter(task => task.status === 'todo')}
+                columnId="todo"
+                onTaskMove={handleTaskMove}
+                allTasks={boardState.tasks}
+                onEditTask={handleEditTask}
+                onRunTask={handleRunTask}
+              />
+              <EnhancedKanbanColumn
+                title="In Progress"
+                tasks={boardState.tasks.filter(task => task.status === 'in-progress')}
+                columnId="in-progress"
+                onTaskMove={handleTaskMove}
+                allTasks={boardState.tasks}
+                onEditTask={handleEditTask}
+                onRunTask={handleRunTask}
+              />
+              <EnhancedKanbanColumn
+                title="Done"
+                tasks={boardState.tasks.filter(task => task.status === 'done')}
+                columnId="done"
+                onTaskMove={handleTaskMove}
+                allTasks={boardState.tasks}
+                onEditTask={handleEditTask}
+                onRunTask={handleRunTask}
+              />
+            </div>
+          </DndProvider>
+        )}
+      </div>
+
+      {/* Task Edit Modal */}
+      <TaskEditModal
+        task={editingTask}
+        allTasks={boardState.tasks}
+        isOpen={isEditModalOpen}
+        onClose={handleCloseEditModal}
+        onSave={handleSaveTask}
+        onRunTask={handleRunTask}
+        onAskForChanges={handleAskForChanges}
+        selectedWorkspace={selectedWorkspace}
+      />
+
+      {/* Task Create Modal */}
+      <TaskEditModal
+        task={null}
+        allTasks={boardState.tasks}
+        isOpen={isCreateModalOpen}
+        onClose={handleCloseCreateModal}
+        onSave={handleSaveTask}
+        selectedWorkspace={selectedWorkspace}
+        isCreating={true}
+      />
     </div>
   );
 } 

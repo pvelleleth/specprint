@@ -9,6 +9,8 @@ interface EnhancedKanbanColumnProps {
   tasks: Task[];
   allTasks: Task[]; // Add allTasks prop
   onTaskMove: (task: Task, sourceColumnId: string, targetColumnId: string) => void;
+  onEditTask?: (task: Task) => void; // Add edit callback
+  onRunTask?: (task: Task, baseBranch: string) => void; // Updated signature
 }
 
 const ItemType = 'TASK';
@@ -18,7 +20,9 @@ export function EnhancedKanbanColumn({
   columnId, 
   tasks, 
   allTasks,
-  onTaskMove
+  onTaskMove,
+  onEditTask,
+  onRunTask
 }: EnhancedKanbanColumnProps) {
   const [{ isOver }, drop] = useDrop({
     accept: ItemType,
@@ -66,6 +70,8 @@ export function EnhancedKanbanColumn({
           task={task}
           columnId={columnId}
           allTasks={allTasks}
+          onEditTask={onEditTask}
+          onRunTask={onRunTask}
         />
       ))}
       {isOver && (
