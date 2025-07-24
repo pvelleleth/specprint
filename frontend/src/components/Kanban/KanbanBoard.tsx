@@ -376,28 +376,75 @@ export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
       throw new Error('No worktree path available for this task');
     }
 
+    // Clear any existing errors
+    setError(null);
+
+    // Set the task as running
+    const updatedTasks = boardState.tasks.map(t => 
+      t.id === task.id 
+        ? { ...t, isRunning: true }
+        : t
+    );
+
+    setBoardState({
+      ...boardState,
+      tasks: updatedTasks,
+      lastUpdated: new Date().toISOString(),
+    });
+
     try {
       // Use the ContinueClaudeSession function with sessionId, userMessage, and worktreePath
       const result = await ContinueClaudeSession(task.sessionId, prompt, task.worktreePath);
       
       if (result.success) {
-        // Update task status to in-progress if it was done
-        const updatedTasks = boardState.tasks.map(t => 
+        // Update task status to in-progress if it was done, and stop running state
+        const finalUpdatedTasks = boardState.tasks.map(t => 
           t.id === task.id 
-            ? { ...t, status: t.status === 'done' ? 'in-progress' : t.status }
+            ? { 
+                ...t, 
+                status: t.status === 'done' ? 'in-progress' : t.status,
+                isRunning: false
+              }
             : t
         );
 
         setBoardState({
           ...boardState,
-          tasks: updatedTasks,
+          tasks: finalUpdatedTasks,
           lastUpdated: new Date().toISOString(),
         });
       } else {
+        // Stop running state and show error
+        const failedUpdatedTasks = boardState.tasks.map(t => 
+          t.id === task.id 
+            ? { ...t, isRunning: false }
+            : t
+        );
+
+        setBoardState({
+          ...boardState,
+          tasks: failedUpdatedTasks,
+          lastUpdated: new Date().toISOString(),
+        });
+
         throw new Error(result.message);
       }
     } catch (error) {
       console.error('Error continuing Claude session:', error);
+      
+      // Stop running state on error
+      const errorUpdatedTasks = boardState.tasks.map(t => 
+        t.id === task.id 
+          ? { ...t, isRunning: false }
+          : t
+      );
+
+      setBoardState({
+        ...boardState,
+        tasks: errorUpdatedTasks,
+        lastUpdated: new Date().toISOString(),
+      });
+
       throw error;
     }
   };

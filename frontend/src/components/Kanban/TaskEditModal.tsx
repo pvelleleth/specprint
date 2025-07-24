@@ -150,12 +150,16 @@ export function TaskEditModal({
 
     setIsSubmittingChanges(true);
     try {
-      await onAskForChanges(task, changesPrompt);
+      // Close the dialog immediately since the task will show as running
       setIsChangesDialogOpen(false);
       setChangesPrompt('');
       onClose();
+      
+      // Call the backend function
+      await onAskForChanges(task, changesPrompt);
     } catch (error) {
       console.error('Error asking for changes:', error);
+      // If there's an error, we need to show it somehow since the modal is closed
       alert('Error asking for changes: ' + error);
     } finally {
       setIsSubmittingChanges(false);
@@ -177,8 +181,8 @@ export function TaskEditModal({
   const allDependenciesCompleted = hasDependencies && completedDependencies.length === (task?.dependencies.length || 0);
   const hasUncompletedDependencies = hasDependencies && !allDependenciesCompleted;
 
-  // Add condition for showing the button - show for both done and in-progress tasks with sessionId
-  const showAskForChanges = !isCreating && (task?.status === 'done' || task?.status === 'in-progress') && !!task?.sessionId && !!onAskForChanges;
+  // Add condition for showing the button - show for both done and in-progress tasks with sessionId, but not when running
+  const showAskForChanges = !isCreating && (task?.status === 'done' || task?.status === 'in-progress') && !!task?.sessionId && !!onAskForChanges && !task?.isRunning;
 
   if (!isOpen || (!task && !isCreating)) {
     return null;
@@ -471,6 +475,7 @@ export function TaskEditModal({
                       onClick={() => setIsChangesDialogOpen(true)}
                       variant="secondary"
                       className="bg-purple-600 hover:bg-purple-700 text-white"
+                      disabled={task?.isRunning}
                     >
                       Ask for changes
                     </Button>
