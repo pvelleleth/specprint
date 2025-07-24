@@ -1863,8 +1863,11 @@ func (a *App) StartTaskConversation(workspaceName string, taskID int, taskTitle,
 	}
 }
 
-// ContinueClaudeSession continues a Claude session using sessionId (simplified)
-func (a *App) ContinueClaudeSession(sessionID, userMessage string) ClaudeSessionResult {
+// ContinueClaudeSession continues a Claude session using sessionId and worktree path
+func (a *App) ContinueClaudeSession(sessionID, userMessage, worktreePath string) ClaudeSessionResult {
+	// Log received session ID for debugging
+	fmt.Printf("ContinueClaudeSession called with SessionID: %s, WorktreePath: %s\n", sessionID, worktreePath)
+
 	// Validate input
 	if strings.TrimSpace(sessionID) == "" {
 		return ClaudeSessionResult{
@@ -1880,8 +1883,23 @@ func (a *App) ContinueClaudeSession(sessionID, userMessage string) ClaudeSession
 		}
 	}
 
-	// Initialize Claude client with current directory (Claude Code will find the right worktree)
-	claudeClient := claude.NewClaudeClient(".")
+	if strings.TrimSpace(worktreePath) == "" {
+		return ClaudeSessionResult{
+			Success: false,
+			Message: "Worktree path cannot be empty",
+		}
+	}
+
+	// Verify the worktree path exists
+	if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
+		return ClaudeSessionResult{
+			Success: false,
+			Message: fmt.Sprintf("Worktree path does not exist: %s", worktreePath),
+		}
+	}
+
+	// Initialize Claude client with the specific worktree path
+	claudeClient := claude.NewClaudeClient(worktreePath)
 
 	// Continue the Claude session
 	claudeResult := claudeClient.ContinueConversation(sessionID, userMessage)

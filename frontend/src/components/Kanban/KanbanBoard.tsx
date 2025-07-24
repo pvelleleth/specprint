@@ -372,9 +372,13 @@ export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
       throw new Error('No session ID available for this task');
     }
 
+    if (!task.worktreePath) {
+      throw new Error('No worktree path available for this task');
+    }
+
     try {
-      // Use the simplified ContinueClaudeSession function (only sessionId and userMessage)
-      const result = await ContinueClaudeSession(task.sessionId, prompt);
+      // Use the ContinueClaudeSession function with sessionId, userMessage, and worktreePath
+      const result = await ContinueClaudeSession(task.sessionId, prompt, task.worktreePath);
       
       if (result.success) {
         // Update task status to in-progress if it was done

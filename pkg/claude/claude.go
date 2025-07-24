@@ -42,7 +42,7 @@ func (c *ClaudeClient) ContinueConversation(sessionId, userMessage string) TaskE
 			Cwd:            &c.workingDirectory,
 			Verbose:        boolPtr(true),
 			PermissionMode: stringPtr("acceptEdits"),
-			Resume:         &sessionId, // Resume existing session using correct field
+			Resume:         stringPtr(sessionId), // Resume existing session using correct field
 		},
 	}
 
@@ -99,84 +99,6 @@ func (c *ClaudeClient) ContinueConversation(sessionId, userMessage string) TaskE
 		Success:      true,
 		Message:      response,
 		SessionID:    sessionId, // Return the same session ID
-		FilesChanged: removeDuplicates(filesChanged),
-	}
-}
-
-// ContinueLatestSession continues the most recent session
-func (c *ClaudeClient) ContinueLatestSession(userMessage string) TaskExecutionResult {
-	ctx := context.Background()
-
-	// Create the request to continue the latest session
-	request := claudecode.QueryRequest{
-		Prompt: userMessage,
-		Options: &claudecode.Options{
-			MaxTurns:       intPtr(10),
-			AllowedTools:   []string{"Read", "Write", "LS", "Grep", "Edit"},
-			SystemPrompt:   stringPtr("You are a senior software engineer helping to implement and modify development tasks. Focus on understanding the user's request and making the appropriate changes while maintaining code quality."),
-			Cwd:            &c.workingDirectory,
-			Verbose:        boolPtr(true),
-			PermissionMode: stringPtr("acceptEdits"),
-			Continue:       boolPtr(true), // Continue the latest session
-		},
-	}
-
-	// Execute the request
-	messages, err := claudecode.QueryWithRequest(ctx, request)
-	if err != nil {
-		return TaskExecutionResult{
-			Success: false,
-			Message: fmt.Sprintf("Failed to continue latest session with Claude: %v", err),
-		}
-	}
-
-	if len(messages) == 0 {
-		return TaskExecutionResult{
-			Success: false,
-			Message: "No response received from Claude",
-		}
-	}
-
-	// Extract response, session ID, and track file changes
-	var sessionID string
-	var filesChanged []string
-	responseContent := []string{}
-
-	for _, message := range messages {
-		switch msg := message.(type) {
-		case *claudecode.ResultMessage:
-			// Try to extract session ID from result
-			sessionID = c.extractSessionIDFromResult(msg)
-			for _, block := range msg.Content() {
-				if textBlock, ok := block.(*claudecode.TextBlock); ok {
-					responseContent = append(responseContent, textBlock.Text)
-				}
-			}
-		case *claudecode.AssistantMessage:
-			for _, block := range msg.Content() {
-				if textBlock, ok := block.(*claudecode.TextBlock); ok {
-					responseContent = append(responseContent, textBlock.Text)
-				}
-				if toolBlock, ok := block.(*claudecode.ToolUseBlock); ok {
-					// Track file operations
-					if toolBlock.Name == "Write" || toolBlock.Name == "Edit" {
-						if path, exists := toolBlock.Input["path"]; exists {
-							if pathStr, ok := path.(string); ok {
-								filesChanged = append(filesChanged, pathStr)
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	response := strings.Join(responseContent, "\n")
-
-	return TaskExecutionResult{
-		Success:      true,
-		Message:      response,
-		SessionID:    sessionID,
 		FilesChanged: removeDuplicates(filesChanged),
 	}
 }
