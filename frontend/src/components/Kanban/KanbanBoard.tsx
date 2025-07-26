@@ -3,7 +3,7 @@ import { DndProvider } from 'react-dnd';
 import { HTML5Backend } from 'react-dnd-html5-backend';
 import { EnhancedKanbanColumn } from './EnhancedKanbanColumn';
 import { TaskEditModal } from './TaskEditModal';
-import { GenerateTasksFromWorkspacePRD, StartTaskConversation, CleanupTaskWorktree, ContinueClaudeSession } from "../../../wailsjs/go/main/App";
+import { GenerateTasksFromWorkspacePRD, StartTaskConversation, CleanupTaskWorktree, ContinueClaudeSession, DeleteTask } from "../../../wailsjs/go/main/App";
 import { Task, BoardState } from './types';
 
 interface KanbanBoardProps {
@@ -22,6 +22,8 @@ export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [runTaskResult, setRunTaskResult] = useState<string | null>(null);
+
+
 
   // Load board state from localStorage on component mount
   useEffect(() => {
@@ -273,6 +275,46 @@ export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
     setIsCreateModalOpen(false);
   };
 
+  const handleDeleteTask = async (task: Task) => {
+    console.log('handleDeleteTask called for task:', task.id, task.title);
+    console.log('selectedWorkspace:', selectedWorkspace?.name);
+    console.log('DeleteTask function available:', typeof DeleteTask);
+    
+    if (!selectedWorkspace) {
+      setError('No workspace selected');
+      console.log('No workspace selected, aborting delete');
+      return;
+    }
+
+    setError(null);
+
+    try {
+      console.log('Calling DeleteTask with:', selectedWorkspace.name, task.id);
+      // Call the backend to delete the task and cleanup worktree
+      const result = await DeleteTask(selectedWorkspace.name, task.id);
+      console.log('DeleteTask result:', result);
+      
+      if (result.success) {
+        // Remove the task from the board state
+        const updatedTasks = boardState.tasks.filter(t => t.id !== task.id);
+        
+        setBoardState({
+          ...boardState,
+          tasks: updatedTasks,
+          lastUpdated: new Date().toISOString(),
+        });
+
+        console.log(`Task ${task.id} deleted successfully: ${result.message}`);
+      } else {
+        console.log('Delete failed:', result.message);
+        setError(`Failed to delete task: ${result.message}`);
+      }
+    } catch (err) {
+      console.error('Error deleting task:', err);
+      setError(`An unexpected error occurred while deleting task #${task.id}`);
+    }
+  };
+
   const handleRunTask = async (task: Task, baseBranch: string) => {
     if (!selectedWorkspace) {
       setError('No workspace selected');
@@ -483,6 +525,10 @@ export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
     );
   }
 
+  // Debug: Log function availability before render
+  console.log('Before render - handleDeleteTask type:', typeof handleDeleteTask);
+  console.log('Before render - handleDeleteTask function:', !!handleDeleteTask);
+
   return (
     <div className="h-full flex flex-col bg-gray-50">
       {/* Header */}
@@ -644,6 +690,7 @@ export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
                 allTasks={boardState.tasks}
                 onEditTask={handleEditTask}
                 onRunTask={handleRunTask}
+                onDeleteTask={handleDeleteTask}
               />
               <EnhancedKanbanColumn
                 title="In Progress"
@@ -653,6 +700,7 @@ export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
                 allTasks={boardState.tasks}
                 onEditTask={handleEditTask}
                 onRunTask={handleRunTask}
+                onDeleteTask={handleDeleteTask}
               />
               <EnhancedKanbanColumn
                 title="Done"
@@ -662,6 +710,7 @@ export function KanbanBoard({ selectedWorkspace }: KanbanBoardProps) {
                 allTasks={boardState.tasks}
                 onEditTask={handleEditTask}
                 onRunTask={handleRunTask}
+                onDeleteTask={handleDeleteTask}
               />
             </div>
           </DndProvider>

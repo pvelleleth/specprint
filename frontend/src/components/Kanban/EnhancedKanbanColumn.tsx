@@ -11,6 +11,7 @@ interface EnhancedKanbanColumnProps {
   onTaskMove: (task: Task, sourceColumnId: string, targetColumnId: string) => void;
   onEditTask?: (task: Task) => void; // Add edit callback
   onRunTask?: (task: Task, baseBranch: string) => void; // Updated signature
+  onDeleteTask?: (task: Task) => void; // Add delete callback
 }
 
 const ItemType = 'TASK';
@@ -22,8 +23,10 @@ export function EnhancedKanbanColumn({
   allTasks,
   onTaskMove,
   onEditTask,
-  onRunTask
+  onRunTask,
+  onDeleteTask
 }: EnhancedKanbanColumnProps) {
+  console.log(`Column ${columnId} - onDeleteTask available:`, !!onDeleteTask);
   const [{ isOver }, drop] = useDrop({
     accept: ItemType,
     drop: (item: { task: Task; sourceColumnId: string }) => {
@@ -72,6 +75,7 @@ export function EnhancedKanbanColumn({
           allTasks={allTasks}
           onEditTask={onEditTask}
           onRunTask={onRunTask}
+          onDeleteTask={onDeleteTask}
         />
       ))}
       {isOver && (

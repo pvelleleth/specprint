@@ -1734,6 +1734,67 @@ func (a *App) CleanupTaskWorktree(workspaceName string, taskID int) TaskExecutio
 	}
 }
 
+// DeleteTaskResult represents the result of deleting a task
+type DeleteTaskResult struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+// DeleteTask removes a task completely, including its worktree if it exists
+func (a *App) DeleteTask(workspaceName string, taskID int) DeleteTaskResult {
+	// Validate input parameters
+	if strings.TrimSpace(workspaceName) == "" {
+		return DeleteTaskResult{
+			Success: false,
+			Message: "Workspace name cannot be empty",
+		}
+	}
+
+	if taskID <= 0 {
+		return DeleteTaskResult{
+			Success: false,
+			Message: "Task ID must be a positive integer",
+		}
+	}
+
+	// Get workspaces to find the target workspace
+	workspacesResult := a.GetWorkspaces()
+	if !workspacesResult.Success {
+		return DeleteTaskResult{
+			Success: false,
+			Message: workspacesResult.Message,
+		}
+	}
+
+	// Find the specified workspace
+	var targetWorkspace *Workspace
+	for i := range workspacesResult.Workspaces {
+		if workspacesResult.Workspaces[i].Name == workspaceName {
+			targetWorkspace = &workspacesResult.Workspaces[i]
+			break
+		}
+	}
+
+	if targetWorkspace == nil {
+		return DeleteTaskResult{
+			Success: false,
+			Message: fmt.Sprintf("Workspace '%s' not found", workspaceName),
+		}
+	}
+
+	// Clean up any worktree for this task if it exists
+	cleanupResult := a.CleanupTaskWorktree(workspaceName, taskID)
+	if !cleanupResult.Success {
+		// Log the cleanup error but don't fail the entire operation
+		fmt.Printf("Warning: Failed to cleanup worktree for task %d: %s\n", taskID, cleanupResult.Message)
+	}
+
+	return DeleteTaskResult{
+		Success: true,
+		Message: fmt.Sprintf("Successfully deleted task %d and cleaned up any associated worktree", taskID),
+	}
+}
+
 // StartTaskConversation starts a new Claude session for a task (simplified - no conversation storage)
 func (a *App) StartTaskConversation(workspaceName string, taskID int, taskTitle, taskDescription, baseBranch string) TaskExecutionResult {
 	// Validate input parameters
@@ -1910,10 +1971,81 @@ func (a *App) ContinueClaudeSession(sessionID, userMessage, worktreePath string)
 		}
 	}
 
+	// Check for changes and commit/push if found (similar to StartTaskConversation)
+	hasChanges, changedFiles := a.checkForGitChanges(worktreePath)
+	if hasChanges {
+		// Use files reported by Claude if available, otherwise use detected files
+		filesToCommit := claudeResult.FilesChanged
+		if len(filesToCommit) == 0 {
+			filesToCommit = changedFiles
+		}
+
+		// Extract branch information for commit and push
+
+		// Get the branch name from git
+		cmd := exec.Command("git", "branch", "--show-current")
+		cmd.Dir = worktreePath
+		branchOutput, err := cmd.Output()
+		branchName := "unknown-branch"
+		if err == nil {
+			branchName = strings.TrimSpace(string(branchOutput))
+		}
+
+		// Create a simple commit message for continued session
+		commitMsg := fmt.Sprintf("Update from continued Claude session\n\nUser request: %s\n\nFiles modified:\n", userMessage)
+		for _, file := range filesToCommit {
+			commitMsg += fmt.Sprintf("- %s\n", file)
+		}
+
+		// Commit changes
+		cmd = exec.Command("git", "add", ".")
+		cmd.Dir = worktreePath
+		if err := cmd.Run(); err != nil {
+			return ClaudeSessionResult{
+				Success: false,
+				Message: fmt.Sprintf("Failed to stage changes: %v", err),
+			}
+		}
+
+		cmd = exec.Command("git", "commit", "-m", commitMsg)
+		cmd.Dir = worktreePath
+		cmd.Env = append(os.Environ(),
+			"GIT_AUTHOR_NAME=Claude Code",
+			"GIT_AUTHOR_EMAIL=claude@anthropic.com",
+			"GIT_COMMITTER_NAME=Claude Code",
+			"GIT_COMMITTER_EMAIL=claude@anthropic.com",
+		)
+
+		if err := cmd.Run(); err != nil {
+			return ClaudeSessionResult{
+				Success: false,
+				Message: fmt.Sprintf("Failed to commit changes: %v", err),
+			}
+		}
+
+		// Push changes
+		cmd = exec.Command("git", "push", "origin", branchName)
+		cmd.Dir = worktreePath
+		if err := cmd.Run(); err != nil {
+			return ClaudeSessionResult{
+				Success: false,
+				Message: fmt.Sprintf("Failed to push changes to branch '%s': %v", branchName, err),
+			}
+		}
+
+		return ClaudeSessionResult{
+			Success:      true,
+			Message:      fmt.Sprintf("Claude session continued successfully. Committed and pushed %d files to branch '%s'", len(filesToCommit), branchName),
+			Response:     claudeResult.Message,
+			FilesChanged: filesToCommit,
+		}
+	}
+
+	// No changes detected
 	return ClaudeSessionResult{
 		Success:      true,
-		Message:      "Claude session continued successfully",
+		Message:      "Claude session continued successfully (no file changes detected)",
 		Response:     claudeResult.Message,
-		FilesChanged: claudeResult.FilesChanged,
+		FilesChanged: []string{},
 	}
 }
