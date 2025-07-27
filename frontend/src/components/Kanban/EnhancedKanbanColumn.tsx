@@ -85,7 +85,7 @@ export function EnhancedKanbanColumn({
   );
 
   return (
-    <div className="flex-1 min-w-80">
+          <div className="flex-1 min-w-72">
       <div className={`rounded-lg border-2 ${getColumnColor(columnId)} ${isOver ? 'border-dashed border-opacity-75' : ''} h-full`}>
         {/* Column Header */}
         <div className={`p-4 rounded-t-lg ${getColumnHeaderColor(columnId)}`}>

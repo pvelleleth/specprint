@@ -6,13 +6,13 @@ SpecPrint is a desktop application that transforms Product Requirements Document
 
 ## ✨ Features
 
-- **AI-Powered Task Generation**: Convert PRDs into structured Epics → Stories → Tasks hierarchy
+- **AI-Powered Task Generation**: Convert PRDs into structured tasks using Anthropic's Claude.
 - **Interactive Kanban Board**: Drag-and-drop task management with real-time updates
 - **Git Repository Integration**: Clone and manage repositories directly in the app
 - **Workspace Management**: Organize projects with dedicated workspaces
 - **PRD Editor**: Create and edit Product Requirements Documents with live preview
 - **Task Dependencies**: Manage task relationships and priorities
-- **Cross-Platform**: Built with Wails (Go + React) for Windows, macOS, and Linux
+- **Cross-Platform**: Built with Wails (Go + React) for Windows, macOS, and Linux (built for macOS first)
 
 ## 🚀 Quick Start
 
@@ -20,6 +20,7 @@ SpecPrint is a desktop application that transforms Product Requirements Document
 - Go 1.21+
 - Node.js 18+
 - Git
+- [Claude Code CLI](https://www.npmjs.com/package/@anthropic-ai/claude-code)
 
 ### Installation
 
@@ -40,11 +41,17 @@ SpecPrint is a desktop application that transforms Product Requirements Document
    cd ..
    ```
 
-3. **Set up environment variables**
-   Create a `.env` file in the project root:
-   ```env
-   OPENAI_API_KEY=your_openai_api_key_here
+3. **Install and set up Claude Code**
+   This application uses the `claude-code` CLI to interact with Anthropic's AI.
+   ```bash
+   # Install the CLI globally
+   npm install -g @anthropic-ai/claude-code
+
+   # Follow the prompts to log in to your Anthropic account
+   claude login
    ```
+   
+   Ensure the `claude` command is available in your system's PATH.
 
 4. **Run in development mode**
    ```bash
@@ -56,6 +63,15 @@ SpecPrint is a desktop application that transforms Product Requirements Document
 ```bash
 wails build
 ```
+
+### macOS Installation Note
+
+The pre-built application for macOS is not yet notarized by Apple. To run it for the first time, you may need to:
+1.  Right-click the application icon.
+2.  Select "Open".
+3.  A dialog will appear. Click "Open" again to confirm you want to run the application.
+
+You should only need to do this the first time you launch the app.
 
 ## 📖 How to Use
 
@@ -72,10 +88,6 @@ wails build
 
 ### 3. Generate Tasks
 - Click "Generate from PRD" to process your document with AI
-- The system will create a structured hierarchy:
-  - **Epics**: High-level features (3-6 epics)
-  - **Stories**: User stories within each epic (2-5 stories per epic)
-  - **Tasks**: Implementation tasks (3-8 tasks per story)
 
 ### 4. Manage with Kanban
 - Click "Kanban Board" to view your tasks
@@ -87,7 +99,7 @@ wails build
 
 - **Backend**: Go with Wails framework
 - **Frontend**: React + TypeScript + Tailwind CSS
-- **AI**: OpenAI GPT-4 integration for task generation
+- **AI**: Anthropic Claude integration via the `@anthropic-ai/claude-code` CLI.
 - **Storage**: Local file system with JSON persistence
 - **Git**: go-git for repository management
 
@@ -110,10 +122,10 @@ specprint/
 └── wails.json           # Wails configuration
 ```
 
-## 🔧 Configuration
+## �� Configuration
 
-### Environment Variables
-- `OPENAI_API_KEY`: Required for AI task generation
+### Claude Code CLI
+This application relies on your local installation and configuration of the `@anthropic-ai/claude-code` CLI tool. There are no separate API keys to manage within this project. All AI interaction is handled through the CLI, using the account you logged into via `claude login`.
 
 ### Workspace Storage
 Workspaces are stored in `~/.aicodingtool/repos/` with the following structure:
@@ -143,10 +155,9 @@ This project is licensed under the GNU General Public License v3.0 - see the [LI
 ## 🆘 Support
 
 For issues and questions:
-- Check the [Task Generation and Kanban Guide](TASK_GENERATION_AND_KANBAN_GUIDE.md)
-- Review the [Kanban Enhancements](KANBAN_ENHANCEMENTS.md) for latest features
+
 - Open an issue on GitHub
 
 ---
 
-**Built with ❤️ using Wails, React, OpenAI, and Claude**
+**Built with ❤️ using Wails, React, and Anthropic Claude**

@@ -161,6 +161,7 @@ frontend/package-lock.json.md5
 # Local configuration files
 *.local 
 
+
 AGENTS.md
 CLAUDE.md
 PRD.md
